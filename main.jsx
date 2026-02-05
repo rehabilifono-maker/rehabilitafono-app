@@ -1,13 +1,10 @@
-/* Estilos base para asegurar que la aplicación ocupe toda la pantalla */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './app.jsx'
+import './index.css'
 
-body {
-  margin: 0;
-  padding: 0;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background-color: #f8fafc;
-}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
