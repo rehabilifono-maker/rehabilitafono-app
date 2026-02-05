@@ -1,0 +1,232 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { 
+  getFirestore, collection, onSnapshot, addDoc, 
+  deleteDoc, doc 
+} from 'firebase/firestore';
+import { 
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend
+} from 'recharts';
+import { 
+  PlusCircle, MinusCircle, LayoutDashboard, ClipboardList, Package, 
+  Bell, TrendingUp, Download, CheckCircle, AlertCircle, Cloud, Loader2,
+  History, Menu, X, Trash2
+} from 'lucide-react';
+
+// --- CONFIGURACIÓN PARA PRODUCCIÓN ---
+// Nota: Para que la base de datos funcione fuera del chat, 
+// eventualmente deberás poner aquí tus propias llaves de Firebase.
+const firebaseConfig = {
+  apiKey: "AIzaSy...", // Placeholder
+  authDomain: "rehabilitafono.firebaseapp.com",
+  projectId: "rehabilitafono",
+  storageBucket: "rehabilitafono.appspot.com",
+  messagingSenderId: "123",
+  appId: "123"
+};
+
+// Intentamos leer la config del entorno o usar la de arriba
+let app, auth, db;
+try {
+  const finalConfig = typeof __firebase_config !== 'undefined' 
+    ? JSON.parse(__firebase_config) 
+    : firebaseConfig;
+  app = initializeApp(finalConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  console.error("Firebase Init Error:", e);
+}
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'rehabilitafono-prod';
+
+// --- CONSTANTES ---
+const META_MENSUAL_OBJETIVO = 1500000;
+const STOCK_INICIAL_LIBROS = 10;
+const CATEGORIAS_INGRESO = ["Evaluación", "Terapia", "Oídos", "Operativo", "Libros", "Otros"];
+const CATEGORIAS_GASTO = ["Combustible", "Tag", "Transporte", "Alimentación", "Materiales", "Otros"];
+const METODOS_PAGO = ["Efectivo", "Transferencia", "Tarjeta"];
+const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState('dashboard');
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+
+  const [formData, setFormData] = useState({
+    tipo: 'Ingreso',
+    categoria: CATEGORIAS_INGRESO[0],
+    monto: '',
+    cantidad: 1,
+    nombre: '',
+    metodoPago: METODOS_PAGO[0],
+    fecha: new Date().toISOString().split('T')[0]
+  });
+
+  useEffect(() => {
+    if (!auth) return;
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (!u) signInAnonymously(auth);
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !db) {
+      setLoading(false);
+      return;
+    }
+    const recordsRef = collection(db, 'artifacts', appId, 'public', 'data', 'registros');
+    const unsubscribe = onSnapshot(recordsRef, (snapshot) => {
+      setRecords(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    }, (err) => {
+      console.error(err);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const stats = useMemo(() => {
+    const currentRecords = records.filter(r => {
+      const d = new Date(r.fecha);
+      return d.getMonth() === selectedMonth && d.getFullYear() === selectedYear;
+    });
+    const ing = currentRecords.filter(r => r.tipo === 'Ingreso').reduce((a, b) => a + Number(b.monto || 0), 0);
+    const egr = currentRecords.filter(r => r.tipo === 'Egreso').reduce((a, b) => a + Number(b.monto || 0), 0);
+    const vendidos = records.filter(r => r.categoria === 'Libros').reduce((a, b) => a + Number(b.cantidad || 0), 0);
+    return { ing, egr, saldo: ing - egr, faltante: Math.max(0, META_MENSUAL_OBJETIVO - ing), stock: STOCK_INICIAL_LIBROS - vendidos };
+  }, [records, selectedMonth, selectedYear]);
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!db || !user) return;
+    try {
+      const recordsRef = collection(db, 'artifacts', appId, 'public', 'data', 'registros');
+      await addDoc(recordsRef, { ...formData, userId: user.uid, ts: Date.now() });
+      setShowModal(false);
+      setMsg({ type: 'success', text: 'Sincronizado' });
+    } catch (e) { setMsg({ type: 'error', text: 'Error' }); }
+  };
+
+  if (loading) return <div className="h-screen flex items-center justify-center bg-purple-900 text-white font-black">CARGANDO REHABILITAFONO...</div>;
+
+  return (
+    <div className="flex h-screen bg-slate-50 overflow-hidden text-slate-800 font-sans">
+      {/* Sidebar Simple */}
+      <aside className={`fixed lg:static inset-y-0 left-0 w-64 bg-purple-950 text-white z-50 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 transition-transform`}>
+        <div className="p-6 border-b border-white/10">
+          <h1 className="font-black text-xl tracking-tighter">REHABILITAFONO</h1>
+        </div>
+        <nav className="p-4 space-y-2">
+          <button onClick={() => setView('dashboard')} className={`w-full text-left p-3 rounded-xl text-xs font-bold uppercase ${view === 'dashboard' ? 'bg-amber-400 text-purple-900' : ''}`}>Dashboard</button>
+          <button onClick={() => setView('records')} className={`w-full text-left p-3 rounded-xl text-xs font-bold uppercase ${view === 'records' ? 'bg-amber-400 text-purple-900' : ''}`}>Movimientos</button>
+        </nav>
+      </aside>
+
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <header className="p-4 lg:p-6 bg-white border-b flex justify-between items-center">
+          <button className="lg:hidden" onClick={() => setIsSidebarOpen(true)}><Menu/></button>
+          <h2 className="font-black uppercase text-sm tracking-widest">{view}</h2>
+          <button onClick={() => setShowModal(true)} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase">+ Nuevo</button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {view === 'dashboard' && (
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white p-6 rounded-3xl border shadow-sm">
+                  <p className="text-[10px] font-black text-slate-400 uppercase">Ingresos</p>
+                  <p className="text-xl font-black text-blue-600">${stats.ing.toLocaleString()}</p>
+                </div>
+                <div className="bg-white p-6 rounded-3xl border shadow-sm">
+                  <p className="text-[10px] font-black text-slate-400 uppercase">Egresos</p>
+                  <p className="text-xl font-black text-fuchsia-600">${stats.egr.toLocaleString()}</p>
+                </div>
+                <div className="bg-white p-6 rounded-3xl border shadow-sm">
+                  <p className="text-[10px] font-black text-slate-400 uppercase">Saldo</p>
+                  <p className="text-xl font-black text-purple-800">${stats.saldo.toLocaleString()}</p>
+                </div>
+                <div className="bg-purple-900 p-6 rounded-3xl text-white">
+                  <p className="text-[10px] font-black uppercase opacity-60">Stock Libros</p>
+                  <p className="text-xl font-black">{stats.stock}</p>
+                </div>
+              </div>
+              
+              <div className="bg-white p-10 rounded-[3rem] border shadow-sm flex flex-col items-center">
+                <h3 className="font-black uppercase text-xs mb-10">Progreso Meta $1.5M</h3>
+                <div className="h-64 w-full max-w-sm relative">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={[{v: stats.ing}, {v: stats.faltante}]} innerRadius="80%" outerRadius="100%" dataKey="v" startAngle={90} endAngle={450}>
+                        <Cell fill="#2563eb" /><Cell fill="#f1f5f9" />
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <p className="text-4xl font-black text-blue-600">{Math.round((stats.ing/META_MENSUAL_OBJETIVO)*100)}%</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'records' && (
+            <div className="max-w-4xl mx-auto bg-white rounded-3xl border overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 border-b">
+                  <tr>
+                    <th className="p-4 text-[10px] font-black uppercase text-slate-400">Fecha</th>
+                    <th className="p-4 text-[10px] font-black uppercase text-slate-400">Detalle</th>
+                    <th className="p-4 text-right text-[10px] font-black uppercase text-slate-400">Monto</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {records.map(r => (
+                    <tr key={r.id} className="text-sm">
+                      <td className="p-4 text-slate-400">{r.fecha}</td>
+                      <td className="p-4 font-bold uppercase">{r.nombre} <br/><span className="text-[10px] text-slate-300">{r.categoria}</span></td>
+                      <td className={`p-4 text-right font-black ${r.tipo === 'Ingreso' ? 'text-blue-600' : 'text-fuchsia-600'}`}>${Number(r.monto).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8">
+             <div className="flex justify-between mb-6">
+               <h3 className="font-black uppercase">Nuevo Registro</h3>
+               <button onClick={() => setShowModal(false)}>✕</button>
+             </div>
+             <form onSubmit={handleSave} className="space-y-4">
+               <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold" value={formData.tipo} onChange={e => setFormData({...formData, tipo: e.target.value})}>
+                 <option value="Ingreso">Ingreso</option>
+                 <option value="Egreso">Gasto</option>
+               </select>
+               <input type="text" placeholder="Nombre/Detalle" className="w-full p-4 bg-slate-50 rounded-2xl" value={formData.nombre} onChange={e => setFormData({...formData, nombre: e.target.value})} />
+               <input type="number" placeholder="Monto" className="w-full p-4 bg-slate-50 rounded-2xl font-black" value={formData.monto} onChange={e => setFormData({...formData, monto: e.target.value})} />
+               <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black uppercase">Guardar</button>
+             </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default App;
